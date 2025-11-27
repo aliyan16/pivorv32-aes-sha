@@ -4,7 +4,7 @@ RISCV_GNU_TOOLCHAIN_INSTALL_PREFIX = /opt/riscv32
 
 # Give the user some easy overrides for local configuration quirks.
 # If you change one of these and it breaks, then you get to keep both pieces.
-SHELL = bash
+# SHELL = bash
 PYTHON = python3
 VERILATOR = verilator
 ICARUS_SUFFIX =
@@ -41,6 +41,17 @@ test_ez: testbench_ez.vvp
 
 test_ez_vcd: testbench_ez.vvp
 	$(VVP) -N $< +vcd
+
+test_aes_pico: testbench_aes_pico.vvp
+	$(VVP) -N $< +vcd
+
+# Read all files from files.txt (excludes empty lines)
+AES_TEST_FILES = $(shell grep -v '^$$' files.txt)
+
+testbench_aes_pico.vvp: $(AES_TEST_FILES)
+	$(IVERILOG) -g2012 -o $@ $(subst C,-DCOMPRESSED_ISA,$(COMPRESSED_ISA)) $^ 
+	chmod -x $@
+
 
 test_sp: testbench_sp.vvp firmware/firmware.hex
 	$(VVP) -N $<
@@ -178,7 +189,8 @@ clean:
 	rm -vrf $(FIRMWARE_OBJS) $(TEST_OBJS) check.smt2 check.vcd synth.v synth.log \
 		firmware/firmware.elf firmware/firmware.bin firmware/firmware.hex firmware/firmware.map \
 		testbench.vvp testbench_sp.vvp testbench_synth.vvp testbench_ez.vvp \
-		testbench_rvf.vvp testbench_wb.vvp testbench.vcd testbench.trace \
+		testbench_rvf.vvp testbench_wb.vvp testbench_aes_pico.vvp \
+		testbench.vcd testbench.trace tb_picorv32_aes.vcd \
 		testbench_verilator testbench_verilator_dir
 
-.PHONY: test test_vcd test_sp test_axi test_wb test_wb_vcd test_ez test_ez_vcd test_synth download-tools build-tools toc clean
+.PHONY: test test_vcd test_sp test_axi test_wb test_wb_vcd test_ez test_ez_vcd test_aes_pico test_synth download-tools build-tools toc clean
