@@ -3129,6 +3129,9 @@ module pcpi_aes (
 	wire aes_done;
 	wire [127:0] Dout;
 
+	reg aes_local_reset;
+
+
 	// Instantiate AES core
 	ASMD_Encryption aes_core (
 		.done          (aes_done),
@@ -3137,7 +3140,8 @@ module pcpi_aes (
 		.key_in        (KEY),
 		.encrypt       (aes_encrypt),
 		.clock         (clk),
-		.reset         (~resetn)
+		.reset(aes_local_reset)
+
 	);
 
 	// FSM states
@@ -3165,7 +3169,8 @@ module pcpi_aes (
 			// Default: clear single-cycle signals
 			pcpi_wr     <= 0;
 			pcpi_ready  <= 0;
-			aes_encrypt <= 0;
+			aes_encrypt <= 0;       // ...............
+			aes_local_reset <= 0;
 
 			case (state)
 			IDLE: begin
@@ -3211,6 +3216,7 @@ module pcpi_aes (
 					aes_encrypt <= 1;
 					aes_running <= 1;
 					state       <= WAIT_AES;
+					aes_local_reset <= 1;
 				end
 				else if (instr_read) begin
 					// Read result word

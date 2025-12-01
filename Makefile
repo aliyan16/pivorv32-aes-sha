@@ -42,6 +42,8 @@ test_ez: testbench_ez.vvp
 test_ez_vcd: testbench_ez.vvp
 	$(VVP) -N $< +vcd
 
+
+#..................
 test_aes_pico: testbench_aes_pico.vvp
 	$(VVP) -N $< +vcd
 
