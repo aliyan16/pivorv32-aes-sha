@@ -43,17 +43,22 @@ test_ez_vcd: testbench_ez.vvp
 	$(VVP) -N $< +vcd
 
 
-#..................
+#..................  >>> aes encryption
 test_aes_pico: testbench_aes_pico.vvp
 	$(VVP) -N $< +vcd
 
-# Read all files from files.txt (excludes empty lines)
-AES_TEST_FILES = $(shell grep -v '^$$' files.txt)
+
+AES_TEST_FILES = $(shell grep -v '^$$' encryption_files.txt)
 
 testbench_aes_pico.vvp: $(AES_TEST_FILES)
 	$(IVERILOG) -g2012 -o $@ $(subst C,-DCOMPRESSED_ISA,$(COMPRESSED_ISA)) $^ 
 	chmod -x $@
+#END   aes encryption
 
+#.................. >>>  aes Decryption
+
+
+#END  aes encryption
 
 test_sp: testbench_sp.vvp firmware/firmware.hex
 	$(VVP) -N $<
