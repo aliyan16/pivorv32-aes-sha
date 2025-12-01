@@ -77,6 +77,7 @@ module picorv32 #(
 	parameter [ 0:0] ENABLE_FAST_MUL = 0,
 	parameter [ 0:0] ENABLE_DIV = 0,
 	parameter [ 0:0] ENABLE_AES = 0,
+	parameter [ 0:0] ENABLE_AES_DEC = 0,
 	parameter [ 0:0] ENABLE_IRQ = 0,
 	parameter [ 0:0] ENABLE_IRQ_QREGS = 1,
 	parameter [ 0:0] ENABLE_IRQ_TIMER = 1,
@@ -167,7 +168,7 @@ module picorv32 #(
 	localparam integer regfile_size = (ENABLE_REGS_16_31 ? 32 : 16) + 4*ENABLE_IRQ*ENABLE_IRQ_QREGS;
 	localparam integer regindex_bits = (ENABLE_REGS_16_31 ? 5 : 4) + ENABLE_IRQ*ENABLE_IRQ_QREGS;
 
-	localparam WITH_PCPI = ENABLE_PCPI || ENABLE_MUL || ENABLE_FAST_MUL || ENABLE_DIV || ENABLE_AES;
+	localparam WITH_PCPI = ENABLE_PCPI || ENABLE_MUL || ENABLE_FAST_MUL || ENABLE_DIV || ENABLE_AES || ENABLE_AES_DEC;
 
 	localparam [35:0] TRACE_BRANCH = {4'b 0001, 32'b 0};
 	localparam [35:0] TRACE_ADDR   = {4'b 0010, 32'b 0};
@@ -270,6 +271,11 @@ module picorv32 #(
 	wire        pcpi_aes_wait;
 	wire        pcpi_aes_ready;
 
+	wire        pcpi_aesdec_wr;
+	wire [31:0] pcpi_aesdec_rd;
+	wire        pcpi_aesdec_wait;
+	wire        pcpi_aesdec_ready;
+
 	reg        pcpi_int_wr;
 	reg [31:0] pcpi_int_rd;
 	reg        pcpi_int_wait;
@@ -348,11 +354,39 @@ module picorv32 #(
 		assign pcpi_aes_ready = 0;
 	end endgenerate
 
+	generate if (ENABLE_AES_DEC) begin
+		pcpi_aes_dec pcpi_aes_dec_inst (
+			.clk       (clk              ),
+			.resetn    (resetn           ),
+			.pcpi_valid(pcpi_valid       ),
+			.pcpi_insn (pcpi_insn        ),
+			.pcpi_rs1  (pcpi_rs1         ),
+			.pcpi_rs2  (pcpi_rs2         ),
+			.pcpi_wr   (pcpi_aesdec_wr   ),
+			.pcpi_rd   (pcpi_aesdec_rd   ),
+			.pcpi_wait (pcpi_aesdec_wait ),
+			.pcpi_ready(pcpi_aesdec_ready)
+		);
+	end else begin
+		assign pcpi_aesdec_wr = 0;
+		assign pcpi_aesdec_rd = 32'bx;
+		assign pcpi_aesdec_wait = 0;
+		assign pcpi_aesdec_ready = 0;
+	end endgenerate
+
 	always @* begin
 		pcpi_int_wr = 0;
 		pcpi_int_rd = 32'bx;
-		pcpi_int_wait  = |{ENABLE_PCPI && pcpi_wait,  (ENABLE_MUL || ENABLE_FAST_MUL) && pcpi_mul_wait,  ENABLE_DIV && pcpi_div_wait,  ENABLE_AES && pcpi_aes_wait};
-		pcpi_int_ready = |{ENABLE_PCPI && pcpi_ready, (ENABLE_MUL || ENABLE_FAST_MUL) && pcpi_mul_ready, ENABLE_DIV && pcpi_div_ready, ENABLE_AES && pcpi_aes_ready};
+		pcpi_int_wait  = |{ENABLE_PCPI && pcpi_wait,
+		                   (ENABLE_MUL || ENABLE_FAST_MUL) && pcpi_mul_wait,
+		                   ENABLE_DIV && pcpi_div_wait,
+		                   ENABLE_AES && pcpi_aes_wait,
+		                   ENABLE_AES_DEC && pcpi_aesdec_wait};
+		pcpi_int_ready = |{ENABLE_PCPI && pcpi_ready,
+		                   (ENABLE_MUL || ENABLE_FAST_MUL) && pcpi_mul_ready,
+		                   ENABLE_DIV && pcpi_div_ready,
+		                   ENABLE_AES && pcpi_aes_ready,
+		                   ENABLE_AES_DEC && pcpi_aesdec_ready};
 
 		(* parallel_case *)
 		case (1'b1)
@@ -371,6 +405,10 @@ module picorv32 #(
 			ENABLE_AES && pcpi_aes_ready: begin
 				pcpi_int_wr = pcpi_aes_wr;
 				pcpi_int_rd = pcpi_aes_rd;
+			end
+			ENABLE_AES_DEC && pcpi_aesdec_ready: begin
+				pcpi_int_wr = pcpi_aesdec_wr;
+				pcpi_int_rd = pcpi_aesdec_rd;
 			end
 		endcase
 	end
@@ -3254,6 +3292,188 @@ module pcpi_aes (
 					pcpi_ready  <= 1;
 					pcpi_wait   <= 0;
 					state       <= IDLE;
+				end
+			end
+
+			default: state <= IDLE;
+			endcase
+		end
+	end
+endmodule
+
+
+/***************************************************************
+ * pcpi_aes_dec - AES Decryption Co-Processor for PicoRV32
+ *
+ * Custom Instructions (opcode = 0001011, funct3 = 000):
+ *   funct7=0101000: AES_DEC_LOAD_CT  - Load ciphertext word  (rs1=index 0-3, rs2=data)
+ *   funct7=0101001: AES_DEC_LOAD_KEY - Load key word         (rs1=index 0-3, rs2=data)
+ *   funct7=0101010: AES_DEC_START    - Start decryption      (no operands needed)
+ *   funct7=0101011: AES_DEC_READ     - Read result word      (rs1=index 0-3) -> rd
+ *   funct7=0101100: AES_DEC_STATUS   - Check status          () -> rd (1=done, 0=busy)
+ ***************************************************************/
+module pcpi_aes_dec (
+	input clk, resetn,
+	input             pcpi_valid,
+	input      [31:0] pcpi_insn,
+	input      [31:0] pcpi_rs1,
+	input      [31:0] pcpi_rs2,
+	output reg        pcpi_wr,
+	output reg [31:0] pcpi_rd,
+	output reg        pcpi_wait,
+	output reg        pcpi_ready
+);
+	// Instruction decode
+	wire [6:0] opcode = pcpi_insn[6:0];
+	wire [2:0] funct3 = pcpi_insn[14:12];
+	wire [6:0] funct7 = pcpi_insn[31:25];
+
+	// Detect our custom instructions (opcode = custom-0 = 0001011, funct3 = 000)
+	wire is_custom        = (opcode == 7'b0001011) && (funct3 == 3'b000);
+	wire instr_load_ct    = is_custom && (funct7 == 7'b0101000);
+	wire instr_load_key   = is_custom && (funct7 == 7'b0101001);
+	wire instr_start      = is_custom && (funct7 == 7'b0101010);
+	wire instr_read       = is_custom && (funct7 == 7'b0101011);
+	wire instr_status     = is_custom && (funct7 == 7'b0101100);
+	wire instr_any        = instr_load_ct | instr_load_key | instr_start | instr_read | instr_status;
+
+	// Internal data registers
+	reg [127:0] CT;      // Ciphertext input
+	reg [127:0] KEY;     // Key
+	reg [127:0] RESULT;  // Decrypted plaintext result
+
+	// AES control
+	reg dec_running;
+	reg dec_start_pulse;     // Trigger signal for AES decryption
+	wire dec_done;
+	wire [127:0] Dout;
+
+	reg dec_local_reset;
+
+	// Instantiate AES decryption core
+	ASMD_Decryption aes_dec_core (
+		.done              (dec_done),
+		.Dout              (Dout),
+		.encrypted_text_in (CT),
+		.key_in            (KEY),
+		.decrypt           (dec_start_pulse),
+		.clock             (clk),
+		.reset             (dec_local_reset)
+	);
+
+	// FSM states
+	localparam IDLE       = 3'd0;
+	localparam EXECUTE    = 3'd1;
+	localparam START_DEC  = 3'd2;
+	localparam WAIT_DEC   = 3'd3;
+
+	reg [2:0] state;
+	reg [1:0] word_index;
+
+	always @(posedge clk) begin
+		if (!resetn) begin
+			state         <= IDLE;
+			pcpi_ready    <= 0;
+			pcpi_wr       <= 0;
+			pcpi_wait     <= 0;
+			pcpi_rd       <= 0;
+			CT            <= 128'b0;
+			KEY           <= 128'b0;
+			RESULT        <= 128'b0;
+			dec_running   <= 0;
+			dec_start_pulse <= 0;
+			dec_local_reset <= 0;
+		end else begin
+			// Default: clear single-cycle signals
+			pcpi_wr         <= 0;
+			pcpi_ready      <= 0;
+			dec_start_pulse <= 0;
+			dec_local_reset <= 0;
+
+			case (state)
+			IDLE: begin
+				pcpi_wait <= 0;
+				if (pcpi_valid && instr_any) begin
+					word_index <= pcpi_rs1[1:0];  // Word index from rs1
+					pcpi_wait  <= 1;
+					state      <= EXECUTE;
+				end
+			end
+
+			EXECUTE: begin
+				if (instr_load_ct) begin
+					// Load ciphertext word: CT[index] = rs2
+					case (word_index)
+						2'd0: CT[31:0]    <= pcpi_rs2;
+						2'd1: CT[63:32]   <= pcpi_rs2;
+						2'd2: CT[95:64]   <= pcpi_rs2;
+						2'd3: CT[127:96]  <= pcpi_rs2;
+					endcase
+					pcpi_rd    <= 32'd0;  // Return 0 (success)
+					pcpi_wr    <= 1;
+					pcpi_ready <= 1;
+					pcpi_wait  <= 0;
+					state      <= IDLE;
+				end
+				else if (instr_load_key) begin
+					// Load key word: KEY[index] = rs2
+					case (word_index)
+						2'd0: KEY[31:0]    <= pcpi_rs2;
+						2'd1: KEY[63:32]   <= pcpi_rs2;
+						2'd2: KEY[95:64]   <= pcpi_rs2;
+						2'd3: KEY[127:96]  <= pcpi_rs2;
+					endcase
+					pcpi_rd    <= 32'd0;
+					pcpi_wr    <= 1;
+					pcpi_ready <= 1;
+					pcpi_wait  <= 0;
+					state      <= IDLE;
+				end
+				else if (instr_start) begin
+					// Prepare AES decryption core: assert local reset for one full cycle,
+					// then kick decryption in START_DEC state.
+					dec_running    <= 1;
+					state          <= START_DEC;
+					dec_local_reset <= 1;
+				end
+				else if (instr_read) begin
+					// Read result word
+					case (word_index)
+						2'd0: pcpi_rd <= RESULT[31:0];
+						2'd1: pcpi_rd <= RESULT[63:32];
+						2'd2: pcpi_rd <= RESULT[95:64];
+						2'd3: pcpi_rd <= RESULT[127:96];
+					endcase
+					pcpi_wr    <= 1;
+					pcpi_ready <= 1;
+					pcpi_wait  <= 0;
+					state      <= IDLE;
+				end
+				else if (instr_status) begin
+					// Return status: 1 = done/idle, 0 = busy
+					pcpi_rd    <= dec_running ? 32'd0 : 32'd1;
+					pcpi_wr    <= 1;
+					pcpi_ready <= 1;
+					pcpi_wait  <= 0;
+					state      <= IDLE;
+				end
+			end
+
+			START_DEC: begin
+				// Release reset and issue one-cycle start pulse after reset completed.
+				dec_start_pulse <= 1;
+				state           <= WAIT_DEC;
+			end
+
+			WAIT_DEC: begin
+				if (dec_done) begin
+					RESULT        <= Dout;      // Capture result
+					dec_running   <= 0;
+					pcpi_rd       <= 32'd0;     // Return 0 (success)
+					pcpi_wr       <= 1;
+					pcpi_ready    <= 1;
+					pcpi_wait     <= 0;
+					state         <= IDLE;
 				end
 			end
 

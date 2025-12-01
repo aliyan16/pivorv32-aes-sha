@@ -58,7 +58,16 @@ testbench_aes_pico.vvp: $(AES_TEST_FILES)
 #.................. >>>  aes Decryption
 
 
-#END  aes encryption
+test_aes_decryption_pico: testbench_aes_decryption_pico.vvp
+	$(VVP) -N $< +vcd
+
+AES_DEC_TEST_FILES = $(shell grep -v '^$$' decryption_files.txt)
+
+testbench_aes_decryption_pico.vvp: $(AES_DEC_TEST_FILES)
+	$(IVERILOG) -g2012 -o $@ $(subst C,-DCOMPRESSED_ISA,$(COMPRESSED_ISA)) $^ 
+	chmod -x $@
+
+#END  aes Decryption
 
 test_sp: testbench_sp.vvp firmware/firmware.hex
 	$(VVP) -N $<
@@ -196,7 +205,7 @@ clean:
 	rm -vrf $(FIRMWARE_OBJS) $(TEST_OBJS) check.smt2 check.vcd synth.v synth.log \
 		firmware/firmware.elf firmware/firmware.bin firmware/firmware.hex firmware/firmware.map \
 		testbench.vvp testbench_sp.vvp testbench_synth.vvp testbench_ez.vvp \
-		testbench_rvf.vvp testbench_wb.vvp testbench_aes_pico.vvp \
+		testbench_rvf.vvp testbench_wb.vvp testbench_aes_pico.vvp testbench_aes_decryption_pico.vvp \
 		testbench.vcd testbench.trace tb_picorv32_aes.vcd \
 		testbench_verilator testbench_verilator_dir
 
