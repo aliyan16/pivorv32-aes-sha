@@ -3147,7 +3147,8 @@ module pcpi_aes (
 	// FSM states
 	localparam IDLE       = 3'd0;
 	localparam EXECUTE    = 3'd1;
-	localparam WAIT_AES   = 3'd2;
+	localparam START_AES  = 3'd2;
+	localparam WAIT_AES   = 3'd3;
 
 	reg [2:0] state;
 	reg [1:0] word_index;
@@ -3166,7 +3167,7 @@ module pcpi_aes (
 			aes_encrypt <= 0;
 		end
 		else begin
-			// Default: clear single-cycle signals
+			
 			pcpi_wr     <= 0;
 			pcpi_ready  <= 0;
 			aes_encrypt <= 0;       // ...............
@@ -3176,7 +3177,7 @@ module pcpi_aes (
 			IDLE: begin
 				pcpi_wait <= 0;
 				if (pcpi_valid && instr_any) begin
-					word_index <= pcpi_rs1[1:0];  // Word index from rs1
+					word_index <= pcpi_rs1[1:0]; 
 					pcpi_wait  <= 1;
 					state      <= EXECUTE;
 				end
@@ -3191,7 +3192,7 @@ module pcpi_aes (
 						2'd2: PT[95:64]   <= pcpi_rs2;
 						2'd3: PT[127:96]  <= pcpi_rs2;
 					endcase
-					pcpi_rd    <= 32'd0;  // Return 0 (success)
+					pcpi_rd    <= 32'd0;  
 					pcpi_wr    <= 1;
 					pcpi_ready <= 1;
 					pcpi_wait  <= 0;
@@ -3212,10 +3213,8 @@ module pcpi_aes (
 					state      <= IDLE;
 				end
 				else if (instr_start) begin
-					// Start AES encryption
-					aes_encrypt <= 1;
 					aes_running <= 1;
-					state       <= WAIT_AES;
+					state       <= START_AES;
 					aes_local_reset <= 1;
 				end
 				else if (instr_read) begin
@@ -3232,13 +3231,18 @@ module pcpi_aes (
 					state      <= IDLE;
 				end
 				else if (instr_status) begin
-					// Return status: 1 = done/idle, 0 = busy
 					pcpi_rd    <= aes_running ? 32'd0 : 32'd1;
 					pcpi_wr    <= 1;
 					pcpi_ready <= 1;
 					pcpi_wait  <= 0;
 					state      <= IDLE;
 				end
+			end
+
+			START_AES: begin
+			
+				aes_encrypt <= 1;
+				state <= WAIT_AES;
 			end
 
 			WAIT_AES: begin
