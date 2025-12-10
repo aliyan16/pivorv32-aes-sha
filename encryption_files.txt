@@ -11,3 +11,6 @@ Aes-Code/Register.v
 Aes-Code/S_BOX.v
 Aes-Code/shift_rows.v
 Aes-Code/Sub_Bytes.v
+Sha-code/sha-core.v
+Sha-code/sha-memory.v
+Sha-code/sha-constants.v
