@@ -43,17 +43,33 @@ test_ez_vcd: testbench_ez.vvp
 	$(VVP) -N $< +vcd
 
 
-#..................  >>> aes encryption
+#..................  >>> aes encryption + sha-256 chaining
+# Test AES encryption with automatic SHA-256 hashing
+# Flow: AES_START -> AES encryption -> SHA-256 hash -> pcpi_ready
+# 
+# Usage:
+#   make test_aes_pico        - Run test with VCD waveform output
+#   make test_aes_pico_novcd  - Run test without VCD (faster)
+#
+# The testbench automatically chains AES encryption to SHA-256 hashing.
+# When AES_START instruction is executed, it:
+#   1. Encrypts plaintext with AES-128
+#   2. Takes 128-bit ciphertext and pads with zeros to 512 bits
+#   3. Computes SHA-256 hash of the padded block
+#   4. Returns pcpi_ready=1 only after both operations complete
 test_aes_pico: testbench_aes_pico.vvp
 	$(VVP) -N $< +vcd
 
+# Test AES+SHA-256 without VCD (faster execution)
+test_aes_pico_novcd: testbench_aes_pico.vvp
+	$(VVP) -N $<
 
 AES_TEST_FILES = $(shell grep -v '^$$' encryption_files.txt)
 
 testbench_aes_pico.vvp: $(AES_TEST_FILES)
 	$(IVERILOG) -g2012 -o $@ $(subst C,-DCOMPRESSED_ISA,$(COMPRESSED_ISA)) $^ 
 	chmod -x $@
-#END   aes encryption
+#END   aes encryption + sha-256 chaining
 
 #.................. >>> fpga_top_encryption testbench
 # Reuse AES files but drop the standalone AES testbench and extra picorv32 duplication
@@ -223,4 +239,4 @@ clean:
 		testbench.vcd testbench.trace tb_picorv32_aes.vcd \
 		testbench_verilator testbench_verilator_dir
 
-.PHONY: test test_vcd test_sp test_axi test_wb test_wb_vcd test_ez test_ez_vcd test_aes_pico test_synth download-tools build-tools toc clean
+.PHONY: test test_vcd test_sp test_axi test_wb test_wb_vcd test_ez test_ez_vcd test_aes_pico test_aes_pico_novcd test_synth download-tools build-tools toc clean
