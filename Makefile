@@ -43,19 +43,19 @@ test_ez_vcd: testbench_ez.vvp
 	$(VVP) -N $< +vcd
 
 
-#..................  >>> aes encryption + sha-256 chaining
-# Test AES encryption with automatic SHA-256 hashing
-# Flow: AES_START -> AES encryption -> SHA-256 hash -> pcpi_ready
+#..................  >>> aes encryption + sha-256 parallel execution
+# Test AES encryption with parallel SHA-256 hashing
+# Flow: AES_START -> Start AES encryption AND SHA-256 hashing in parallel -> pcpi_ready
 # 
 # Usage:
 #   make test_aes_pico        - Run test with VCD waveform output
 #   make test_aes_pico_novcd  - Run test without VCD (faster)
 #
-# The testbench automatically chains AES encryption to SHA-256 hashing.
+# The testbench automatically starts AES encryption and SHA-256 hashing in parallel.
 # When AES_START instruction is executed, it:
-#   1. Encrypts plaintext with AES-128
-#   2. Takes 128-bit ciphertext and pads with zeros to 512 bits
-#   3. Computes SHA-256 hash of the padded block
+#   1. Prepares SHA-256 block: plaintext (128 bits) + key (128 bits) + zeros (256 bits) = 512 bits
+#   2. Starts AES encryption (encrypts plaintext with key)
+#   3. Starts SHA-256 hashing in PARALLEL (hashes plaintext + key + padding)
 #   4. Returns pcpi_ready=1 only after both operations complete
 test_aes_pico: testbench_aes_pico.vvp
 	$(VVP) -N $< +vcd

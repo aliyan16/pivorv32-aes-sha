@@ -3131,7 +3131,13 @@ endmodule
  *   funct7=0100011: AES_READ     - Read result word     (rs1=index 0-3) -> rd
  *   funct7=0100100: AES_STATUS   - Check status         () -> rd (1=done, 0=busy)
  * 
- * Flow: AES encryption -> SHA-256 hash of ciphertext -> pcpi_ready
+ * Flow: When AES_START is issued:
+ *   1. Prepare SHA-256 block: 128-bit plaintext + 128-bit key + 256-bit zeros = 512 bits
+ *   2. Start AES encryption and SHA-256 hashing in PARALLEL
+ *   3. Wait for both operations to complete
+ *   4. Return pcpi_ready=1 only after both AES and SHA-256 complete
+ * 
+ * SHA-256 input: {plaintext[127:0], key[127:0], 256'b0}
  ***************************************************************/
 module pcpi_aes (
 	input clk, resetn,
@@ -3206,12 +3212,10 @@ module pcpi_aes (
 	// FSM states
 	localparam IDLE         = 4'd0;
 	localparam EXECUTE      = 4'd1;
-	localparam START_AES    = 4'd2;
-	localparam WAIT_AES     = 4'd3;
-	localparam PREPARE_SHA  = 4'd4;
-	localparam INIT_SHA     = 4'd5;
-	localparam START_SHA    = 4'd6;
-	localparam WAIT_SHA     = 4'd7;
+	localparam PREPARE_BOTH = 4'd2;
+	localparam INIT_SHA     = 4'd3;
+	localparam START_BOTH   = 4'd4;
+	localparam WAIT_BOTH    = 4'd5;
 
 	reg [3:0] state;
 	reg [1:0] word_index;
@@ -3283,7 +3287,7 @@ module pcpi_aes (
 				end
 				else if (instr_start) begin
 					aes_running <= 1;
-					state       <= START_AES;
+					state       <= PREPARE_BOTH;
 					aes_local_reset <= 1;
 				end
 				else if (instr_read) begin
@@ -3308,43 +3312,46 @@ module pcpi_aes (
 				end
 			end
 
-			START_AES: begin
-				aes_encrypt <= 1;
-				state <= WAIT_AES;
-			end
-
-			WAIT_AES: begin
-				if (aes_done) begin
-					RESULT      <= Dout;      // Capture AES encrypted result (128 bits)
-					state       <= PREPARE_SHA;
-				end
-			end
-
-			PREPARE_SHA: begin
-				// Prepare SHA-256 block: 128 bits from AES + 384 bits of zeros = 512 bits
+			PREPARE_BOTH: begin
+				// Prepare SHA-256 block: 128 bits plaintext + 128 bits key + 256 bits zeros = 512 bits
 				// SHA block format: {block_reg[0], block_reg[1], ..., block_reg[15]}
 				// where block_reg[0] is bits [511:480] and block_reg[15] is bits [31:0]
-				// We put AES result in block_reg[0-3] (highest 128 bits), pad rest with zeros
-				// Format: {RESULT[31:0], RESULT[63:32], RESULT[95:64], RESULT[127:96], 12*32'b0}
-				sha_block <= {RESULT[31:0], RESULT[63:32], RESULT[95:64], RESULT[127:96], 384'b0};
+				// Format: {PT[31:0], PT[63:32], PT[95:64], PT[127:96], KEY[31:0], KEY[63:32], KEY[95:64], KEY[127:96], 256'b0}
+				sha_block <= {PT[31:0], PT[63:32], PT[95:64], PT[127:96], 
+				              KEY[31:0], KEY[63:32], KEY[95:64], KEY[127:96], 256'b0};
+				aes_local_reset <= 0;  // Clear reset signal
 				state <= INIT_SHA;
 			end
 
 			INIT_SHA: begin
 				// Initialize SHA-256 (sets up initial hash values)
 				sha_init <= 1;
-				state <= START_SHA;
+				state <= START_BOTH;
 			end
 
-			START_SHA: begin
-				// Start processing the SHA-256 block
+			START_BOTH: begin
+				// Start both AES encryption and SHA-256 hashing in parallel
+				aes_encrypt <= 1;
 				sha_next <= 1;
-				state <= WAIT_SHA;
+				sha_init <= 0;  // Clear init signal
+				state <= WAIT_BOTH;
 			end
 
-			WAIT_SHA: begin
+			WAIT_BOTH: begin
+				// Wait for both AES encryption and SHA-256 hashing to complete
+				sha_next <= 0;  // Clear next signal after one cycle
+				aes_encrypt <= 0;  // Clear encrypt signal after one cycle
+				
+				// Capture results as they become available
+				if (aes_done) begin
+					RESULT <= Dout;  // Capture AES encrypted result (128 bits)
+				end
 				if (sha_digest_valid) begin
 					SHA_DIGEST <= sha_digest_out;  // Capture SHA-256 hash
+				end
+				
+				// Check if both operations are complete
+				if (aes_done && sha_digest_valid) begin
 					aes_running <= 0;
 					pcpi_rd     <= 32'd1;     // Return 1 (success - both AES and SHA done)
 					pcpi_wr     <= 1;

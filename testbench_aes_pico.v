@@ -6,19 +6,24 @@
  * This testbench runs a RISC-V program that:
  * 1. Loads 128-bit plaintext (4 x 32-bit words)
  * 2. Loads 128-bit key (4 x 32-bit words)
- * 3. Starts AES encryption (which automatically chains to SHA-256)
+ * 3. Starts AES encryption (which automatically starts SHA-256 in parallel)
  * 4. Polls for completion (waits for both AES and SHA-256 to complete)
  * 5. Reads and stores the encrypted result
  *
- * Flow: AES_START -> AES encryption -> SHA-256 hash of ciphertext -> pcpi_ready
+ * Flow: When AES_START is issued:
+ *   - AES encryption starts (encrypts plaintext with key)
+ *   - SHA-256 hashing starts in PARALLEL (hashes plaintext + key + padding)
+ *   - pcpi_ready=1 only after both operations complete
+ * 
+ * SHA-256 input: 128-bit plaintext + 128-bit key + 256-bit zeros = 512 bits
  * 
  * AES-128 Test Vector:
  *   Plaintext:  0x00112233445566778899aabbccddeeff
  *   Key:        0x000102030405060708090a0b0c0d0e0f
  *   Ciphertext: 0x69c4e0d86a7b0430d8cdb78070b4c55a
  *   
- * Note: SHA-256 automatically computes hash of the AES ciphertext
- *       (128 bits padded with zeros to form 512-bit block)
+ * Note: SHA-256 computes hash of (plaintext || key || zeros)
+ *       Both AES and SHA-256 start simultaneously when AES_START is issued
  ***************************************************************/
 
 module tb_picorv32_aes;
@@ -133,7 +138,7 @@ module tb_picorv32_aes;
     end
 
     /*******************************************************************
-     * RISC-V Program to test AES + SHA-256 Chaining
+     * RISC-V Program to test AES + SHA-256 Parallel Execution
      * 
      * Custom instruction encoding (R-type):
      *   [31:25] funct7  [24:20] rs2  [19:15] rs1  [14:12] funct3  [11:7] rd  [6:0] opcode
@@ -141,14 +146,14 @@ module tb_picorv32_aes;
      * AES Instructions (opcode=0001011, funct3=000):
      *   AES_LOAD_PT  : funct7=0100000 (0x20)
      *   AES_LOAD_KEY : funct7=0100001 (0x21)
-     *   AES_START    : funct7=0100010 (0x22) - Automatically chains to SHA-256
+     *   AES_START    : funct7=0100010 (0x22) - Starts AES and SHA-256 in parallel
      *   AES_READ     : funct7=0100011 (0x23)
      *   AES_STATUS   : funct7=0100100 (0x24)
      * 
      * Note: AES_START now automatically:
-     *   1. Encrypts plaintext with AES-128
-     *   2. Takes 128-bit ciphertext and pads with zeros to 512 bits
-     *   3. Computes SHA-256 hash of the padded block
+     *   1. Prepares SHA-256 block: plaintext (128 bits) + key (128 bits) + zeros (256 bits) = 512 bits
+     *   2. Starts AES encryption (encrypts plaintext with key)
+     *   3. Starts SHA-256 hashing in PARALLEL (hashes plaintext + key + padding)
      *   4. Returns pcpi_ready=1 only after both AES and SHA-256 complete
      *******************************************************************/
     
@@ -196,14 +201,15 @@ module tb_picorv32_aes;
         memory[19] = 32'h00C22283;  // lw x5, 12(x4)        ; x5 = KEY[3]
         memory[20] = 32'h4251800B;  // AES_LOAD_KEY x0, x5, x3 ; KEY[127:96] = x5
 
-        // Start AES encryption (automatically chains to SHA-256)
-        // This will: AES encrypt -> SHA-256 hash -> pcpi_ready
+        // Start AES encryption (automatically starts SHA-256 in parallel)
+        // This will: Start AES encryption AND SHA-256 hashing simultaneously
+        // SHA-256 input: plaintext (128 bits) + key (128 bits) + zeros (256 bits) = 512 bits
         // The pcpi_ready signal will be asserted only after BOTH operations complete
-        memory[21] = 32'h4400000B;  // AES_START (triggers AES + SHA-256 chain)
+        memory[21] = 32'h4400000B;  // AES_START (triggers AES + SHA-256 in parallel)
 
         // Poll for completion (loop until status != 0)
         // Status will be 1 only after both AES encryption AND SHA-256 hashing complete
-        // This polling loop will wait for the entire AES->SHA-256 chain to finish
+        // This polling loop will wait for both parallel operations to finish
         memory[22] = 32'h4800038B;  // AES_STATUS x7, x0, x0  ; x7 = status
         memory[23] = 32'hFE038EE3;  // beq x7, x0, -4         ; if busy, loop back
 
@@ -269,8 +275,9 @@ module tb_picorv32_aes;
             $display("Full ciphertext:  0x%08x_%08x_%08x_%08x", 
                      memory[75], memory[74], memory[73], memory[72]);
             $display("");
-            $display("Note: SHA-256 hash was automatically computed on the ciphertext");
-            $display("      (128-bit ciphertext padded with zeros to 512-bit block)");
+            $display("Note: SHA-256 hash was automatically computed in parallel with AES");
+            $display("      SHA-256 input: plaintext (128 bits) + key (128 bits) + zeros (256 bits)");
+            $display("      Both AES encryption and SHA-256 hashing started simultaneously");
             $display("");
             
             // Expected AES ciphertext values
@@ -279,7 +286,7 @@ module tb_picorv32_aes;
                 memory[74] == 32'h6a7b0430 &&
                 memory[75] == 32'h69c4e0d8) begin
                 $display("*** TEST PASSED! AES Ciphertext matches expected value ***");
-                $display("*** SHA-256 hash was automatically computed during AES_START ***");
+                $display("*** SHA-256 hash was automatically computed in parallel with AES ***");
             end else begin
                 $display("*** TEST RESULT: Check ciphertext against your AES core ***");
                 $display("Expected AES ciphertext: 0x69c4e0d8_6a7b0430_d8cdb780_70b4c55a");
